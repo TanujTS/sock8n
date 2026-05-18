@@ -5,7 +5,7 @@
   "private": true,
   "main": "index.js",
   "scripts": {
-    "dev:server": "pnpm --filter server dev"
+    "dev:api": "pnpm --filter api dev"
   },
   "keywords": [],
   "author": "",
