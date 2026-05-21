@@ -22,7 +22,7 @@ export default function ChatPage() {
   const [isConnected, setIsConnected] = useState(false);
 
   const wsRef = useRef<WebSocket | null>(null);
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     // Connect to WebSocket
@@ -81,9 +81,7 @@ export default function ChatPage() {
 
   useEffect(() => {
     // Auto-scroll to bottom when messages change
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
   const handleSendMessage = () => {
@@ -134,15 +132,15 @@ export default function ChatPage() {
       </aside>
 
       {/* Main Chat Area */}
-      <main className="flex-1 flex flex-col h-full relative">
+      <main className="flex-1 flex flex-col h-full relative overflow-hidden min-h-0 min-w-0">
         {/* Header */}
         <header className="h-14 border-b flex items-center px-6 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 z-10 shrink-0">
           <h2 className="font-grotesk font-semibold text-foreground">Chat</h2>
         </header>
 
         {/* Messages Area */}
-        <ScrollArea className="flex-1 p-6" ref={scrollRef}>
-          <div className="max-w-4xl mx-auto space-y-6 pb-6">
+        <ScrollArea className="flex-1 min-h-0">
+          <div className="max-w-4xl mx-auto space-y-6 p-6">
             {messages.length === 0 && (
               <div className="h-full flex flex-col items-center justify-center text-muted-foreground pt-32 space-y-4">
                 <Bot className="h-12 w-12 opacity-20" />
@@ -208,6 +206,7 @@ export default function ChatPage() {
                 </div>
               );
             })}
+            <div ref={messagesEndRef} />
           </div>
         </ScrollArea>
 
