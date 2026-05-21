@@ -22,5 +22,8 @@
       "onFail": "download"
     }
   },
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild"]
+  },
   "type": "module"
 }
