@@ -2,4 +2,5 @@ packages:
   - "apps/*"
 allowBuilds:
   '@google/genai': true
+  msw: true
   protobufjs: true
