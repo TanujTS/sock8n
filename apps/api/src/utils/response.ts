@@ -1,6 +1,6 @@
 import WebSocket from 'ws';
 
-export type ResponseType = "system" | "ai" | "error";
+export type ResponseType = "system" | "ai" | "error" | "ai_chunk";
 
 export interface ApiResponse<T = any> {
     success: boolean;

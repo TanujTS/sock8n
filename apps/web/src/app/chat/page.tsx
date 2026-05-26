@@ -36,13 +36,39 @@ export default function ChatPage() {
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
-        const newMessage: ChatMessage = {
-          id: Date.now().toString() + Math.random().toString(36).substring(7),
-          type: data.type || "ai",
-          text: data.message || "",
-          timestamp: new Date(),
-        };
-        setMessages((prev) => [...prev, newMessage]);
+        
+        setMessages((prev) => {
+          const lastMsg = prev[prev.length - 1];
+
+          // Handle streaming chunks
+          if (data.type === "ai_chunk") {
+            if (lastMsg && lastMsg.type === "ai") {
+              // Append to the existing AI message block
+              const updatedMessages = [...prev];
+              updatedMessages[updatedMessages.length - 1] = {
+                ...lastMsg,
+                text: lastMsg.text + (data.message || "")
+              };
+              return updatedMessages;
+            } else {
+              // Create the initial AI message block for the first chunk
+              return [...prev, {
+                id: Date.now().toString() + Math.random().toString(36).substring(7),
+                type: "ai",
+                text: data.message || "",
+                timestamp: new Date(),
+              }];
+            }
+          }
+
+          // Handle standard full messages (user, system, error)
+          return [...prev, {
+            id: Date.now().toString() + Math.random().toString(36).substring(7),
+            type: data.type || "ai",
+            text: data.message || "",
+            timestamp: new Date(),
+          }];
+        });
       } catch (err) {
         console.error("Failed to parse message", err);
       }
