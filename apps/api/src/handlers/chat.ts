@@ -6,16 +6,18 @@ import { ChatMemory } from "../ai/memory";
 import { sendWsMessage } from "../utils/response";
 
 const MAX_TOOL_ITERATIONS = 5; // safety: prevent infinite loops
+type HilCallback = (call: { callId: string; name: string; args: Record<string, unknown> }) => Promise<boolean>;
 
 export async function handleChatMessage(
   ws: WebSocket,
   message: string,
-  memory: ChatMemory
+  memory: ChatMemory,
+  requestApproval: HilCallback
 ) {
   try {
     memory.addUserMessage(message);
     console.log(JSON.stringify(memory.getHistory()))
-    await runAgentLoop(ws, memory);
+    await runAgentLoop(ws, memory, requestApproval);
   } catch (err) {
     console.error(err);
     sendWsMessage(ws, "error", "Something went wrong processing your message.");
@@ -23,7 +25,7 @@ export async function handleChatMessage(
 }
 
 // agent loop: call Gemini → if tool → execute → call Gemini again
-async function runAgentLoop(ws: WebSocket, memory: ChatMemory) {
+async function runAgentLoop(ws: WebSocket, memory: ChatMemory, requestApproval: HilCallback) {
   for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
     const stream = await ai.models.generateContentStream({
       model: MODEL_NAME,
@@ -47,20 +49,34 @@ async function runAgentLoop(ws: WebSocket, memory: ChatMemory) {
           // Store the model's decision to call this tool
           memory.addFunctionCall(call.name, args);
 
-          // -- INSERT HIL CHECKPOINT HERE LATER --
-          sendWsMessage(ws, "system", `Executing: ${call.name}(${JSON.stringify(args)})`);
+          // ===== HIL CHECKPOINT =====
+
+          const callId = crypto.randomUUID();
+          sendWsMessage(ws, "system", `Gemini wants to call "${call.name}"...`);
+
+          const approved = await requestApproval({ callId, name: call.name, args });
+
+          if (!approved) {
+            // User cancelled — tell Gemini it didn't happen
+            memory.addFunctionResponse(call.name, {
+              cancelled: true,
+              reason: "User declined the action.",
+            });
+            sendWsMessage(ws, "system", `Action "${call.name}" was cancelled.`);
+            continue;
+          }
 
           try {
+            sendWsMessage(ws, "system", `Executing "${call.name}"...`);
             const result = await executeN8nWebhook(call.name, args);
 
-            // Store result in the correct format so Gemini can see it
+            // Store result in the correct functionResponse format
             memory.addFunctionResponse(call.name, result as Record<string, unknown>);
-
-            sendWsMessage(ws, "system", `Tool "${call.name}" succeeded.`);
+            sendWsMessage(ws, "system", `"${call.name}" succeeded.`);
           } catch (err: unknown) {
-            const message = err instanceof Error ? err.message : "Unknown error";
-            memory.addFunctionResponse(call.name, { error: message });
-            sendWsMessage(ws, "error", `Tool "${call.name}" failed: ${message}`);
+            const msg = err instanceof Error ? err.message : "Unknown error";
+            memory.addFunctionResponse(call.name, { error: msg });
+            sendWsMessage(ws, "error", `"${call.name}" failed: ${msg}`);
           }
         }
 
