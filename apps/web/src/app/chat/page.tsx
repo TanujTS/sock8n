@@ -1,28 +1,71 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from "react";
-import { Send, Bot, AlertTriangle, Terminal, Clock, MessageSquare } from "lucide-react";
+import { Send, Bot, AlertTriangle, Terminal, MessageSquare } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Card } from "@/components/ui/card";
 
-type MessageType = "user" | "ai" | "system" | "error";
+type MessageType = "user" | "ai" | "system" | "error" | "pending_approval";
 
 interface ChatMessage {
   id: string;
   type: MessageType;
   text: string;
   timestamp: Date;
+  data?: { callId: string; name: string; args: Record<string, unknown> };
 }
+
+const createMessageId = () => Date.now().toString() + Math.random().toString(36).substring(7);
+
+const appendSystemMessage = (messages: ChatMessage[], text: string): ChatMessage[] => {
+  const latestTranscriptIndex = Math.max(
+    messages.findLastIndex((msg) => msg.type === "user"),
+    messages.findLastIndex((msg) => msg.type === "ai"),
+    messages.findLastIndex((msg) => msg.type === "error")
+  );
+  const existingLogIndex = messages.findLastIndex(
+    (msg, index) => msg.type === "system" && index > latestTranscriptIndex
+  );
+
+  if (existingLogIndex === -1) {
+    return [
+      ...messages,
+      {
+        id: createMessageId(),
+        type: "system",
+        text,
+        timestamp: new Date(),
+      },
+    ];
+  }
+
+  const existingLog = messages[existingLogIndex];
+  const updatedLog: ChatMessage = {
+    ...existingLog,
+    text: [existingLog.text, text].filter(Boolean).join("\n"),
+    timestamp: new Date(),
+  };
+
+  return [
+    ...messages.slice(0, existingLogIndex),
+    ...messages.slice(existingLogIndex + 1),
+    updatedLog,
+  ];
+};
 
 export default function ChatPage() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputValue, setInputValue] = useState("");
   const [isConnected, setIsConnected] = useState(false);
+  const [resolvedApprovals, setResolvedApprovals] = useState<Record<string, boolean>>({});
 
   const wsRef = useRef<WebSocket | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const hasPendingApproval = messages.some(
+    (msg) => msg.type === "pending_approval" && msg.data?.callId && !resolvedApprovals[msg.data.callId]
+  );
 
   useEffect(() => {
     // Connect to WebSocket
@@ -61,12 +104,17 @@ export default function ChatPage() {
             }
           }
 
-          // Handle standard full messages (user, system, error)
+          if (data.type === "system") {
+            return appendSystemMessage(prev, data.message || "");
+          }
+
+          // Handle standard full messages (user, system, error, pending_approval)
           return [...prev, {
-            id: Date.now().toString() + Math.random().toString(36).substring(7),
+            id: createMessageId(),
             type: data.type || "ai",
             text: data.message || "",
             timestamp: new Date(),
+            data: data.data,
           }];
         });
       } catch (err) {
@@ -110,8 +158,33 @@ export default function ChatPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  const sendApproval = (callId: string, approved: boolean) => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+
+    wsRef.current.send(JSON.stringify({
+      type: "tool_approval",
+      callId,
+      approved,
+    }));
+
+    setResolvedApprovals((prev) => ({ ...prev, [callId]: true }));
+  };
+
   const handleSendMessage = () => {
     if (!inputValue.trim() || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+
+    if (hasPendingApproval) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: Date.now().toString() + Math.random().toString(36).substring(7),
+          type: "system",
+          text: "Please confirm or cancel the pending action before sending another message.",
+          timestamp: new Date(),
+        },
+      ]);
+      return;
+    }
 
     const newMsg: ChatMessage = {
       id: Date.now().toString(),
@@ -212,8 +285,58 @@ export default function ChatPage() {
                         </h4>
                       </div>
                       <div className="bg-background border rounded-md p-3 font-jb-mono text-sm text-foreground overflow-x-auto">
-                        <span className="text-primary mr-2">{'>'}</span>
-                        {msg.text}
+                        <div className="space-y-1">
+                          {msg.text.split("\n").map((line, index) => (
+                            <div key={`${msg.id}-${index}`} className="flex gap-2">
+                              <span className="text-primary shrink-0">{'>'}</span>
+                              <span className="whitespace-pre-wrap break-words">{line}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </Card>
+                  </div>
+                );
+              }
+
+              if (msg.type === "pending_approval") {
+                const callId = msg.data?.callId;
+                const isResolved = Boolean(callId && resolvedApprovals[callId]);
+
+                return (
+                  <div key={msg.id} className="flex justify-start w-full">
+                    <Card className="bg-amber-500/10 border-amber-500/20 p-4 rounded-xl w-full max-w-2xl shadow-sm">
+                      <div className="flex items-start gap-3">
+                        <AlertTriangle className="h-5 w-5 text-amber-500 shrink-0 mt-0.5" />
+                        <div className="flex-1 min-w-0">
+                          <h4 className="font-semibold text-amber-500 mb-1 font-grotesk">
+                            Confirm action
+                          </h4>
+                          <p className="text-sm text-foreground mb-3 whitespace-pre-wrap">{msg.text}</p>
+                          {msg.data?.args && (
+                            <pre className="text-xs bg-muted/50 border border-amber-500/10 p-3 rounded-md mb-3 font-jb-mono overflow-x-auto text-foreground">
+                              {JSON.stringify(msg.data.args, null, 2)}
+                            </pre>
+                          )}
+                          <div className="flex flex-wrap gap-2">
+                            <Button
+                              size="sm"
+                              onClick={() => callId && sendApproval(callId, true)}
+                              disabled={!callId || isResolved}
+                              className="bg-amber-500 hover:bg-amber-600 text-white"
+                            >
+                              {isResolved ? "Decision sent" : "Confirm"}
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => callId && sendApproval(callId, false)}
+                              disabled={!callId || isResolved}
+                            >
+                              Cancel
+                            </Button>
+                          </div>
+                        </div>
                       </div>
                     </Card>
                   </div>
@@ -243,13 +366,19 @@ export default function ChatPage() {
               value={inputValue}
               onChange={(e) => setInputValue(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder={isConnected ? "Type a command or request..." : "Connecting to server..."}
-              disabled={!isConnected}
+              placeholder={
+                !isConnected
+                  ? "Connecting to server..."
+                  : hasPendingApproval
+                    ? "Confirm or cancel the pending action first..."
+                    : "Type a command or request..."
+              }
+              disabled={!isConnected || hasPendingApproval}
               className="pr-12 h-14 bg-muted/30 border-muted-foreground/20 focus-visible:ring-primary/30 rounded-xl text-base shadow-sm font-geist"
             />
             <Button
               size="icon"
-              disabled={!inputValue.trim() || !isConnected}
+              disabled={!inputValue.trim() || !isConnected || hasPendingApproval}
               onClick={handleSendMessage}
               className="absolute right-2 top-2 h-10 w-10 rounded-lg transition-all"
             >
